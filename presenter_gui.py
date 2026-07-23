@@ -5,6 +5,7 @@ from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
+from pptx.enum.shapes import MSO_SHAPE
 import requests
 from io import BytesIO
 import zipfile
@@ -18,16 +19,28 @@ import threading
 class PresenterApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("CatalogMaster v3.0 🚀 - Plantillas, Multifuente & Vista Previa")
-        self.root.geometry("750x950") 
+        self.root.title("CatalogMaster v3.1 🚀 - Menú de Plantillas & Divisor de Productos")
+        self.root.geometry("760x960") 
         self.root.configure(bg="#f0f0f0")
         
         self.excel_path = tk.StringVar()
         self.output_path = tk.StringVar()
         self.template_path = tk.StringVar()
+        self.template_select_var = tk.StringVar(value="🎨 Predeterminada (Lienzo Blanco)")
         self.local_img_folder = tk.StringVar()
         self.progress_var = tk.DoubleVar(value=0)
         
+        # Mapeo de plantillas predefinidas
+        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.templates_dir = os.path.join(self.base_dir, "templates")
+        
+        self.builtin_templates = {
+            "🎨 Predeterminada (Lienzo Blanco)": "",
+            "🌙 Dark Mode Elegante": os.path.join(self.templates_dir, "plantilla_dark_mode.pptx"),
+            "👔 Corporativa Azul Navy": os.path.join(self.templates_dir, "plantilla_corporativa_navy.pptx"),
+            "🔥 Deportiva Urban Red": os.path.join(self.templates_dir, "plantilla_deportiva_urban.pptx")
+        }
+
         self.map_vars = {
             'sku': tk.StringVar(),
             'name': tk.StringVar(),
@@ -73,18 +86,28 @@ class PresenterApp:
         main_canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        header = tk.Label(scrollable_frame, text="CatalogMaster v3.0", font=("Arial", 20, "bold"), bg="#f0f0f0", fg="#333")
+        header = tk.Label(scrollable_frame, text="CatalogMaster v3.1", font=("Arial", 20, "bold"), bg="#f0f0f0", fg="#333")
         header.pack(pady=(0, 2))
-        sub_header = tk.Label(scrollable_frame, text="Plantillas Personalizadas • Búsqueda Multifuente • Vista Previa en Tiempo Real", font=("Arial", 9, "italic"), bg="#f0f0f0", fg="#555")
+        sub_header = tk.Label(scrollable_frame, text="Selección Fácil de Plantillas • Divisor Claro entre Productos • Vista Previa Interactiva", font=("Arial", 9, "italic"), bg="#f0f0f0", fg="#555")
         sub_header.pack(pady=(0, 10))
         
-        # --- SECCIÓN 1: Archivos y Rutas ---
-        files_frame = tk.LabelFrame(scrollable_frame, text="Archivos y Rutas de Entrada", bg="#f0f0f0", font=("Arial", 10, "bold"), padx=10, pady=10)
+        # --- SECCIÓN 1: Selección de Plantilla y Rutas ---
+        files_frame = tk.LabelFrame(scrollable_frame, text="Plantilla & Archivos de Entrada", bg="#f0f0f0", font=("Arial", 10, "bold"), padx=10, pady=10)
         files_frame.pack(fill="x", pady=(0, 10))
+
+        # Menú Desplegable de Plantillas
+        tpl_row = tk.Frame(files_frame, bg="#f0f0f0", pady=4)
+        tpl_row.pack(fill="x")
+        lbl_tpl = tk.Label(tpl_row, text="Plantilla Visual:", font=("Arial", 9, "bold"), bg="#f0f0f0", width=22, anchor="w", fg="#007bff")
+        lbl_tpl.pack(side="left")
+        
+        tpl_options = list(self.builtin_templates.keys()) + ["📁 Buscar otra plantilla (.pptx)..."]
+        self.cb_template = ttk.Combobox(tpl_row, textvariable=self.template_select_var, values=tpl_options, state="readonly", font=("Arial", 9))
+        self.cb_template.pack(side="left", expand=True, fill="x", padx=5)
+        self.cb_template.bind("<<ComboboxSelected>>", self.on_template_selected)
 
         self.create_file_row(files_frame, "Excel File (.xlsx):", self.excel_path, self.browse_excel)
         self.create_file_row(files_frame, "Save As (.pptx):", self.output_path, self.browse_output)
-        self.create_file_row(files_frame, "Plantilla PPTX (Opcional):", self.template_path, self.browse_template)
         self.create_file_row(files_frame, "Carpeta Imágenes (Opcional):", self.local_img_folder, self.browse_local_img_folder)
 
         # --- SECCIÓN 2: Mapeo de Columnas ---
@@ -127,7 +150,7 @@ class PresenterApp:
         middle_frame.pack(fill="x", pady=(0, 10))
 
         # Izquierda: Orden de campos
-        self.order_frame = tk.LabelFrame(middle_frame, text="Orden de Visualización", bg="#f0f0f0", font=("Arial", 10, "bold"), padx=10, pady=10)
+        self.order_frame = tk.LabelFrame(middle_frame, text="Orden de Campos", bg="#f0f0f0", font=("Arial", 10, "bold"), padx=10, pady=10)
         self.order_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
 
         list_container = tk.Frame(self.order_frame, bg="#f0f0f0")
@@ -147,7 +170,7 @@ class PresenterApp:
         btn_down = tk.Button(btn_container, text="🔽 Bajar", command=self.move_down, width=8, cursor="hand2")
         btn_down.pack(pady=3)
 
-        # Derecha: Panel de Vista Previa (Live Preview)
+        # Derecha: Panel de Vista Previa (Live Preview con Divisor)
         preview_frame = tk.LabelFrame(middle_frame, text="👁️ Vista Previa en Tiempo Real", bg="#f0f0f0", font=("Arial", 10, "bold"), padx=10, pady=10)
         preview_frame.pack(side="right", fill="both", expand=True, padx=(5, 0))
 
@@ -166,6 +189,19 @@ class PresenterApp:
         
         self.log_area = scrolledtext.ScrolledText(scrollable_frame, height=6, font=("Consolas", 9), state='disabled', bg="#fff", fg="#555")
         self.log_area.pack(fill="x")
+
+    def on_template_selected(self, event=None):
+        selected = self.template_select_var.get()
+        if selected == "📁 Buscar otra plantilla (.pptx)...":
+            self.browse_template()
+        elif selected in self.builtin_templates:
+            tpl_path = self.builtin_templates[selected]
+            self.template_path.set(tpl_path)
+            if tpl_path:
+                self.log(f"🎨 Plantilla seleccionada del menú: {selected}")
+            else:
+                self.log("🎨 Seleccionada plantilla predeterminada (Lienzo blanco).")
+        self.update_preview()
 
     def move_up(self):
         try:
@@ -215,7 +251,9 @@ class PresenterApp:
         path = filedialog.askopenfilename(filetypes=[("PowerPoint files", "*.pptx")])
         if path: 
             self.template_path.set(path)
-            self.log(f"🎨 Plantilla seleccionada: {os.path.basename(path)}")
+            self.template_select_var.set(f"📁 Custom: {os.path.basename(path)}")
+            self.log(f"🎨 Plantilla cargada externamente: {os.path.basename(path)}")
+            self.update_preview()
 
     def browse_local_img_folder(self):
         path = filedialog.askdirectory()
@@ -271,25 +309,64 @@ class PresenterApp:
             self.log(f"❌ Error al cargar encabezados: {e}")
 
     def update_preview(self):
-        """Renderiza una vista previa gráfica de la diapositiva en el Canvas."""
+        """Renderiza una vista previa gráfica interactiva de la diapositiva en el Canvas con el Divisor Claro."""
         cv = self.preview_canvas
         cv.delete("all")
         
         W, H = 320, 210
-        cv.create_rectangle(2, 2, W-2, H-2, fill="#ffffff", outline="#333333", width=1)
-        cv.create_line(W/2, 2, W/2, H-2, fill="#e0e0e0", dash=(3, 3))
-        cv.create_line(2, H/2, W-2, H/2, fill="#e0e0e0", dash=(3, 3))
+        tpl_name = self.template_select_var.get()
 
-        # Muestras simuladas
+        bg_color = "#ffffff"
+        card_bg = "#ffffff"
+        text_main = "#000000"
+        text_accent = "#d9534f"
+        divider_color = "#007bff"
+        header_bg = None
+        side_stripe = None
+
+        if "Dark Mode" in tpl_name:
+            bg_color = "#12141A"
+            card_bg = "#1C202A"
+            text_main = "#ffffff"
+            text_accent = "#ffd700"
+            divider_color = "#ffd700"
+            header_bg = "#ffd700"
+        elif "Corporativa Azul Navy" in tpl_name:
+            bg_color = "#f5f7fa"
+            card_bg = "#ffffff"
+            text_main = "#102540"
+            text_accent = "#007aff"
+            divider_color = "#007aff"
+            header_bg = "#0a2540"
+        elif "Deportiva Urban Red" in tpl_name:
+            bg_color = "#fafafa"
+            card_bg = "#ffffff"
+            text_main = "#111111"
+            text_accent = "#ff4500"
+            divider_color = "#ff4500"
+            side_stripe = "#ff4500"
+
+        cv.create_rectangle(2, 2, W-2, H-2, fill=bg_color, outline="#333333", width=1)
+
+        # Adornos visuales de la plantilla en Canvas
+        if header_bg:
+            cv.create_rectangle(2, 2, W-2, 14, fill=header_bg, outline="")
+        if side_stripe:
+            cv.create_rectangle(2, 2, 12, H-2, fill=side_stripe, outline="")
+
+        # --- DIVISOR CLARO ENTRE PRODUCTO 1 Y PRODUCTO 2 ---
+        cv.create_line(15, H/2, W-15, H/2, fill=divider_color, width=3)
+        cv.create_text(W/2, H/2, text=" DIVISOR DE PRODUCTO ", fill=divider_color, font=("Arial", 6, "bold"))
+
         sample_order = list(self.order_listbox.get(0, tk.END))
-        
-        # Cuadrante 1: Imagen Izquierda, Texto Derecha
-        cv.create_rectangle(10, 10, W/2 - 10, H/2 - 10, fill="#f8f9fa", outline="#007bff", width=1, dash=(2, 2))
-        cv.create_text(W/4, H/4, text="📷 Imagen P1", fill="#007bff", font=("Arial", 8, "bold"))
-        
-        # Texto P1
-        y_text = 12
-        for visual_name in sample_order[:5]:
+
+        # --- PRODUCTO 1 (Arriba) ---
+        img_x1 = 20 if not side_stripe else 24
+        cv.create_rectangle(img_x1, 20, W/2 - 10, H/2 - 10, fill=card_bg, outline=divider_color, width=1, dash=(2, 2))
+        cv.create_text((img_x1 + W/2 - 10)/2, (20 + H/2 - 10)/2, text="📷 Producto 1", fill=divider_color, font=("Arial", 7, "bold"))
+
+        y_text = 20
+        for visual_name in sample_order[:4]:
             key = self.display_to_key.get(visual_name, '')
             val_col = self.map_vars.get(key, type('obj', (), {'get': lambda: ''})()).get()
             if val_col == "--- Ninguno ---" or not val_col:
@@ -299,17 +376,16 @@ class PresenterApp:
             txt = f"{prefix} Muestra"
             if key == 'price': txt = "Precio: $1,299.00"
             elif key == 'sku': txt = "SKU: 100266540"
-            elif key == 'name': txt = "NOMBRE EJEMPLO"
+            elif key == 'name': txt = "REEBOK VIVA SPEED"
             
-            color = "#000000" if key != 'price' else "#d9534f"
+            color = text_main if key != 'price' else text_accent
             font_w = "bold" if key in ['name', 'price', 'sku'] else "normal"
             cv.create_text(W/2 + 10, y_text, text=txt[:22], anchor="nw", fill=color, font=("Arial", 7, font_w))
-            y_text += 14
-            if y_text > H/2 - 15: break
+            y_text += 13
 
-        # Cuadrante 2: Texto Izquierda, Imagen Derecha
-        y_text2 = H/2 + 12
-        for visual_name in sample_order[:5]:
+        # --- PRODUCTO 2 (Abajo) ---
+        y_text2 = H/2 + 15
+        for visual_name in sample_order[:4]:
             key = self.display_to_key.get(visual_name, '')
             val_col = self.map_vars.get(key, type('obj', (), {'get': lambda: ''})()).get()
             if val_col == "--- Ninguno ---" or not val_col:
@@ -319,16 +395,15 @@ class PresenterApp:
             txt = f"{prefix} Muestra"
             if key == 'price': txt = "Precio: $1,499.00"
             elif key == 'sku': txt = "SKU: 100272105"
-            elif key == 'name': txt = "NOMBRE EJEMPLO 2"
+            elif key == 'name': txt = "NFX TRAINER 2"
             
-            color = "#000000" if key != 'price' else "#d9534f"
+            color = text_main if key != 'price' else text_accent
             font_w = "bold" if key in ['name', 'price', 'sku'] else "normal"
-            cv.create_text(10, y_text2, text=txt[:22], anchor="nw", fill=color, font=("Arial", 7, font_w))
-            y_text2 += 14
-            if y_text2 > H - 15: break
+            cv.create_text(img_x1, y_text2, text=txt[:22], anchor="nw", fill=color, font=("Arial", 7, font_w))
+            y_text2 += 13
 
-        cv.create_rectangle(W/2 + 10, H/2 + 10, W - 10, H - 10, fill="#f8f9fa", outline="#28a745", width=1, dash=(2, 2))
-        cv.create_text(3*W/4, 3*H/4, text="📷 Imagen P2", fill="#28a745", font=("Arial", 8, "bold"))
+        cv.create_rectangle(W/2 + 10, H/2 + 15, W - 15, H - 15, fill=card_bg, outline=divider_color, width=1, dash=(2, 2))
+        cv.create_text((W/2 + 10 + W - 15)/2, (H/2 + 15 + H - 15)/2, text="📷 Producto 2", fill=divider_color, font=("Arial", 7, "bold"))
 
     def log(self, message):
         self.log_area.configure(state='normal')
@@ -405,7 +480,6 @@ class PresenterApp:
 
     def resolve_product_image_bytes(self, product, embedded_map, row_idx):
         """Búsqueda multifuente de imágenes: 1) Embebida en Excel, 2) Carpeta Local, 3) CDN S3."""
-        # 1. Embebida en Excel
         for diff in [0, -1, 1]:
             for (r, c), data in embedded_map.items():
                 if (r + 1) == (row_idx + diff):
@@ -414,7 +488,6 @@ class PresenterApp:
         sku = product['sku']
         extensions = ['jpg', 'png', 'jpeg', 'webp', 'JPG', 'PNG', 'JPEG', 'WEBP']
 
-        # 2. Carpeta local de imágenes
         local_dir = self.local_img_folder.get()
         if local_dir and os.path.isdir(local_dir):
             for ext in extensions:
@@ -426,7 +499,6 @@ class PresenterApp:
                     except Exception:
                         pass
 
-        # 3. Servidor CDN S3 (Probando múltiples extensiones)
         for ext in ['jpg', 'png', 'jpeg', 'webp']:
             url = f"https://s3.amazonaws.com/cdn.grabasaweb.mx/Imagenes/Imagenes_Preventa/{sku}.{ext}"
             try:
@@ -439,7 +511,6 @@ class PresenterApp:
         return None, "No encontrada"
 
     def build_dynamic_data(self, product):
-        """Construye los datos estructurados para texto con formato enriquecido."""
         lines_data = []
         
         for visual_name in self.current_order:
@@ -452,12 +523,12 @@ class PresenterApp:
             if key == 'name':
                 lines_data.append(('NOMBRE:', f" {val.upper()}", False))
             elif key == 'price':
-                lines_data.append(('', '', True)) # Agrega una línea en blanco antes del precio
+                lines_data.append(('', '', True))
                 lines_data.append(('Precio:', f" ${val}", False))
             elif key == 'sku':
                 lines_data.append(('SKU / Modelo:', f" {val}", False))
             elif key == 'sizes':
-                lines_data.append(('Talla:', f"\n{val}", False)) # Obliga a las tallas a bajar de renglón
+                lines_data.append(('Talla:', f"\n{val}", False))
             else:
                 label_prefixes = {
                     'temp': 'Temp:',
@@ -533,6 +604,16 @@ class PresenterApp:
             total_slides = (len(products) + 1) // 2
             layout_idx = 6 if len(prs.slide_layouts) > 6 else 0
 
+            # Determinar color de línea divisoria según plantilla
+            tpl_name = self.template_select_var.get()
+            div_color = RGBColor(0, 122, 255)
+            if "Dark Mode" in tpl_name:
+                div_color = RGBColor(255, 215, 0) # Gold
+            elif "Urban Red" in tpl_name:
+                div_color = RGBColor(255, 69, 0) # Red-Orange
+            elif "Corporativa" in tpl_name:
+                div_color = RGBColor(0, 122, 255) # Blue
+
             for i in range(0, len(products), 2):
                 slide_num = i // 2
                 progress = (slide_num / total_slides) * 100
@@ -549,9 +630,17 @@ class PresenterApp:
                             slide.shapes._spTree.insert_element_before(new_el, 'p:extLst')
                 else:
                     slide = prs.slides.add_slide(prs.slide_layouts[layout_idx])
+                
                 sw, sh = prs.slide_width, prs.slide_height
                 qw, qh = sw / 2, sh / 2
                 pad = Inches(0.4)
+
+                # --- AGREGAR DIVISOR VISUAL ENTRE PRODUCTO 1 Y PRODUCTO 2 ---
+                if i + 1 < len(products):
+                    divider = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.4), qh, sw - Inches(0.8), Inches(0.04))
+                    divider.fill.solid()
+                    divider.fill.fore_color.rgb = div_color
+                    divider.line.color.rgb = div_color
 
                 # --- PRODUCTO 1 ---
                 p1 = products[i]
