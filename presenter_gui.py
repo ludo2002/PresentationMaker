@@ -9,6 +9,7 @@ import requests
 from io import BytesIO
 import zipfile
 import xml.etree.ElementTree as ET
+import posixpath
 from PIL import Image
 import threading
 
@@ -244,10 +245,23 @@ class PresenterApp:
                     root = ET.fromstring(xml_content)
                     ns = {
                         'xdr': 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
-                        'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
-                        'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+                        'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'
                     }
-                    for anchor in root.findall('.//xdr:twoCellAnchor', ns) + root.findall('.//xdr:oneCellAnchor', ns):
+                    
+                    rels_path = posixpath.join(posixpath.dirname(drawing_file), '_rels', posixpath.basename(drawing_file) + '.rels')
+                    rels_map = {}
+                    if rels_path in z.namelist():
+                        rels_content = z.read(rels_path)
+                        rels_root = ET.fromstring(rels_content)
+                        rel_ns = {'rel': 'http://schemas.openxmlformats.org/package/2006/relationships'}
+                        for r in rels_root.findall('.//rel:Relationship', rel_ns):
+                            rid = r.get('Id')
+                            target = r.get('Target')
+                            mode = r.get('TargetMode', 'Internal')
+                            rels_map[rid] = (target, mode)
+
+                    anchors = root.findall('.//xdr:twoCellAnchor', ns) + root.findall('.//xdr:oneCellAnchor', ns)
+                    for anchor in anchors:
                         from_node = anchor.find('xdr:from', ns)
                         if from_node is not None:
                             row = int(from_node.find('xdr:row', ns).text)
@@ -256,17 +270,18 @@ class PresenterApp:
                             if pic is not None:
                                 blip = pic.find('.//a:blip', ns)
                                 if blip is not None:
-                                    rid = blip.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
-                                    rels_path = drawing_file.replace('.xml', '.xml.rels')
-                                    if rels_path in z.namelist():
-                                        rels_content = z.read(rels_path)
-                                        rels_root = ET.fromstring(rels_content)
-                                        rel = rels_root.find(f".//r:Relationship[@Id='{rid}']", ns)
-                                        if rel is not None:
-                                            target = rel.get('Target')
-                                            full_img_path = 'xl/' + target if not target.startswith('xl/') else target
-                                            if full_img_path in z.namelist():
-                                                embedded_images[(row, col)] = z.read(full_img_path)
+                                    rid = None
+                                    for attr_k, attr_v in blip.attrib.items():
+                                        if attr_k.endswith('embed') or attr_k.endswith('id') or attr_k.endswith('link'):
+                                            rid = attr_v
+                                            break
+                                    if rid and rid in rels_map:
+                                        target, mode = rels_map[rid]
+                                        if mode == 'Internal':
+                                            full_path = posixpath.normpath(posixpath.join(posixpath.dirname(drawing_file), target))
+                                            if full_path in z.namelist():
+                                                embedded_images[(row, col)] = z.read(full_path)
+            self.log(f"🖼️ Se extrajeron {len(embedded_images)} imágenes embebidas del archivo Excel.")
         except Exception as e:
             self.log(f"⚠️ Error extrayendo imágenes embebidas: {e}")
         return embedded_images
@@ -327,27 +342,35 @@ class PresenterApp:
             for row_idx, row in enumerate(sheet.iter_rows(min_row=self.header_row_idx + 1, values_only=True), start=self.header_row_idx + 1):
                 sku_idx = m_indices['sku']
                 sku_val = row[sku_idx] if sku_idx is not None and sku_idx < len(row) else None
-                if not sku_val: continue
+                if not sku_val or str(sku_val).strip() == "": continue
+                
+                clean_sku = str(sku_val).strip()
+                if clean_sku.endswith('.0'):
+                    clean_sku = clean_sku[:-2]
                 
                 img_bytes = None
-                for (r, c), data in embedded_map.items():
-                    if r + 1 == row_idx:
-                        img_bytes = data
+                # Check exact row match first, then adjacent rows (tolerance for anchor offsets)
+                for diff in [0, -1, 1]:
+                    for (r, c), data in embedded_map.items():
+                        if (r + 1) == (row_idx + diff):
+                            img_bytes = data
+                            break
+                    if img_bytes:
                         break
                 
-                final_url = f"https://s3.amazonaws.com/cdn.grabasaweb.mx/Imagenes/Imagenes_Preventa/{sku_val}.jpg"
+                final_url = f"https://s3.amazonaws.com/cdn.grabasaweb.mx/Imagenes/Imagenes_Preventa/{clean_sku}.jpg"
                 
                 def get_val(key):
                     idx = m_indices[key]
                     if idx is not None:
                         if idx < len(row) and row[idx] is not None:
-                            return str(row[idx])
+                            return str(row[idx]).strip()
                         else:
                             return "N/A"
                     return ""
 
                 products.append({
-                    'sku': str(sku_val), 
+                    'sku': clean_sku, 
                     'name': get_val('name'), 
                     'color': get_val('color'), 
                     'price': get_val('price'), 
