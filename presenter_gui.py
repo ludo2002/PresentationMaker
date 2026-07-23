@@ -608,15 +608,20 @@ class PresenterApp:
             total_slides = (len(products) + 1) // 2
             layout_idx = 6 if len(prs.slide_layouts) > 6 else 0
 
-            # Determinar color de línea divisoria según plantilla
+            # Determinar color y grosor de línea divisoria según plantilla
             tpl_name = self.template_select_var.get()
-            div_color = RGBColor(0, 122, 255)
+            div_color = RGBColor(230, 230, 230) # Gris claro apenas visible para plantilla predeterminada
+            line_thickness = Inches(0.01) # 1pt ultra delgado
+            
             if "Dark Mode" in tpl_name:
                 div_color = RGBColor(255, 215, 0) # Gold
+                line_thickness = Inches(0.03)
             elif "Urban Red" in tpl_name:
                 div_color = RGBColor(255, 69, 0) # Red-Orange
+                line_thickness = Inches(0.03)
             elif "Corporativa" in tpl_name:
                 div_color = RGBColor(0, 122, 255) # Blue
+                line_thickness = Inches(0.03)
 
             for i in range(0, len(products), 2):
                 slide_num = i // 2
@@ -640,7 +645,7 @@ class PresenterApp:
 
                 # --- AGREGAR DIVISOR VISUAL ENTRE PRODUCTO 1 Y PRODUCTO 2 ---
                 if i + 1 < len(products):
-                    divider = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.4), qh, sw - Inches(0.8), Inches(0.04))
+                    divider = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.3), qh, sw - Inches(0.6), line_thickness)
                     divider.fill.solid()
                     divider.fill.fore_color.rgb = div_color
                     divider.line.color.rgb = div_color
@@ -683,7 +688,8 @@ class PresenterApp:
             with Image.open(BytesIO(img_bytes)) as img:
                 img_w, img_h = img.size
                 aspect = img_w / img_h
-                img_pad = Inches(0.3)
+                # Margen reducido (0.1") para maximizar el tamaño de la imagen dentro de la plantilla
+                img_pad = Inches(0.1)
                 max_w = width - 2*img_pad
                 max_h = height - 2*img_pad
                 if aspect > (max_w / max_h):
