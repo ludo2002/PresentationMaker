@@ -558,12 +558,16 @@ class PresenterApp:
                     m_indices[key] = None
 
             has_template_slide = False
+            template_bg_elements = []
             template_file = self.template_path.get()
             if template_file and os.path.isfile(template_file):
                 self.log(f"🎨 Cargando plantilla personalizada: {os.path.basename(template_file)}")
                 prs = Presentation(template_file)
                 if len(prs.slides) > 0:
                     has_template_slide = True
+                    # Snapshot únicamente los elementos de fondo originales de la plantilla
+                    for shape in prs.slides[0].shapes:
+                        template_bg_elements.append(copy.deepcopy(shape.element))
             else:
                 prs = Presentation()
                 prs.slide_width, prs.slide_height = Inches(10), Inches(7.5)
@@ -625,9 +629,8 @@ class PresenterApp:
                         slide = prs.slides[0]
                     else:
                         slide = prs.slides.add_slide(prs.slides[0].slide_layout)
-                        for shape in prs.slides[0].shapes:
-                            new_el = copy.deepcopy(shape.element)
-                            slide.shapes._spTree.insert_element_before(new_el, 'p:extLst')
+                        for bg_el in template_bg_elements:
+                            slide.shapes._spTree.insert_element_before(copy.deepcopy(bg_el), 'p:extLst')
                 else:
                     slide = prs.slides.add_slide(prs.slide_layouts[layout_idx])
                 
