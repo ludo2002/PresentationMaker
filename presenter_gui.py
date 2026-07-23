@@ -11,6 +11,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 import posixpath
 import os
+import copy
 from PIL import Image
 import threading
 
@@ -485,11 +486,13 @@ class PresenterApp:
                 else:
                     m_indices[key] = None
 
-            # --- MEJORA 1: Cargar plantilla PPTX si está seleccionada ---
+            has_template_slide = False
             template_file = self.template_path.get()
             if template_file and os.path.isfile(template_file):
                 self.log(f"🎨 Cargando plantilla personalizada: {os.path.basename(template_file)}")
                 prs = Presentation(template_file)
+                if len(prs.slides) > 0:
+                    has_template_slide = True
             else:
                 prs = Presentation()
                 prs.slide_width, prs.slide_height = Inches(10), Inches(7.5)
@@ -531,11 +534,21 @@ class PresenterApp:
             layout_idx = 6 if len(prs.slide_layouts) > 6 else 0
 
             for i in range(0, len(products), 2):
-                progress = ((i / 2) / total_slides) * 100
+                slide_num = i // 2
+                progress = (slide_num / total_slides) * 100
                 self.progress_var.set(progress)
-                self.log(f"Generando Diapositiva {i//2 + 1}/{total_slides}...")
+                self.log(f"Generando Diapositiva {slide_num + 1}/{total_slides}...")
                 
-                slide = prs.slides.add_slide(prs.slide_layouts[layout_idx])
+                if has_template_slide:
+                    if slide_num == 0:
+                        slide = prs.slides[0]
+                    else:
+                        slide = prs.slides.add_slide(prs.slides[0].slide_layout)
+                        for shape in prs.slides[0].shapes:
+                            new_el = copy.deepcopy(shape.element)
+                            slide.shapes._spTree.insert_element_before(new_el, 'p:extLst')
+                else:
+                    slide = prs.slides.add_slide(prs.slide_layouts[layout_idx])
                 sw, sh = prs.slide_width, prs.slide_height
                 qw, qh = sw / 2, sh / 2
                 pad = Inches(0.4)
