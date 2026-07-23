@@ -10,17 +10,21 @@ from io import BytesIO
 import zipfile
 import xml.etree.ElementTree as ET
 import posixpath
+import os
 from PIL import Image
 import threading
 
 class PresenterApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("CatalogMaster v2.7 🚀 - Formato Enriquecido")
-        self.root.geometry("650x850") 
+        self.root.title("CatalogMaster v3.0 🚀 - Plantillas, Multifuente & Vista Previa")
+        self.root.geometry("750x950") 
         self.root.configure(bg="#f0f0f0")
+        
         self.excel_path = tk.StringVar()
         self.output_path = tk.StringVar()
+        self.template_path = tk.StringVar()
+        self.local_img_folder = tk.StringVar()
         self.progress_var = tk.DoubleVar(value=0)
         
         self.map_vars = {
@@ -50,22 +54,41 @@ class PresenterApp:
         self.current_order = []
         
         self.setup_ui()
+        self.update_preview()
 
     def setup_ui(self):
-        main_frame = tk.Frame(self.root, bg="#f0f0f0", padx=20, pady=20)
-        main_frame.pack(expand=True, fill="both")
+        main_canvas = tk.Canvas(self.root, bg="#f0f0f0", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=main_canvas.yview)
         
-        header = tk.Label(main_frame, text="CatalogMaster", font=("Arial", 20, "bold"), bg="#f0f0f0", fg="#333")
-        header.pack(pady=(0, 5))
-        sub_header = tk.Label(main_frame, text="Professional Product Presentation Generator", font=("Arial", 10), bg="#f0f0f0", fg="#777")
-        sub_header.pack(pady=(0, 15))
+        scrollable_frame = tk.Frame(main_canvas, bg="#f0f0f0", padx=15, pady=15)
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: main_canvas.configure(scrollregion=main_canvas.bbox("all"))
+        )
         
-        self.create_file_row(main_frame, "Excel File (.xlsx):", self.excel_path, self.browse_excel)
-        self.create_file_row(main_frame, "Save As (.pptx):", self.output_path, self.browse_output)
+        main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        main_canvas.configure(yscrollcommand=scrollbar.set)
         
-        # --- SECCIÓN: Mapeo de Columnas ---
-        self.mapping_frame = tk.LabelFrame(main_frame, text="Asignación de Columnas", bg="#f0f0f0", font=("Arial", 10, "bold"), padx=10, pady=10)
-        self.mapping_frame.pack(fill="x", pady=10)
+        main_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        header = tk.Label(scrollable_frame, text="CatalogMaster v3.0", font=("Arial", 20, "bold"), bg="#f0f0f0", fg="#333")
+        header.pack(pady=(0, 2))
+        sub_header = tk.Label(scrollable_frame, text="Plantillas Personalizadas • Búsqueda Multifuente • Vista Previa en Tiempo Real", font=("Arial", 9, "italic"), bg="#f0f0f0", fg="#555")
+        sub_header.pack(pady=(0, 10))
+        
+        # --- SECCIÓN 1: Archivos y Rutas ---
+        files_frame = tk.LabelFrame(scrollable_frame, text="Archivos y Rutas de Entrada", bg="#f0f0f0", font=("Arial", 10, "bold"), padx=10, pady=10)
+        files_frame.pack(fill="x", pady=(0, 10))
+
+        self.create_file_row(files_frame, "Excel File (.xlsx):", self.excel_path, self.browse_excel)
+        self.create_file_row(files_frame, "Save As (.pptx):", self.output_path, self.browse_output)
+        self.create_file_row(files_frame, "Plantilla PPTX (Opcional):", self.template_path, self.browse_template)
+        self.create_file_row(files_frame, "Carpeta Imágenes (Opcional):", self.local_img_folder, self.browse_local_img_folder)
+
+        # --- SECCIÓN 2: Mapeo de Columnas ---
+        self.mapping_frame = tk.LabelFrame(scrollable_frame, text="Asignación de Columnas de Excel", bg="#f0f0f0", font=("Arial", 10, "bold"), padx=10, pady=10)
+        self.mapping_frame.pack(fill="x", pady=(0, 10))
         
         labels = {
             'sku': 'SKU / Modelo:',
@@ -83,13 +106,14 @@ class PresenterApp:
         self.comboboxes = {}
         for key, text_label in labels.items():
             frame = tk.Frame(self.mapping_frame, bg="#f0f0f0")
-            frame.grid(row=row_idx, column=col_idx, padx=5, pady=5, sticky="ew")
+            frame.grid(row=row_idx, column=col_idx, padx=5, pady=4, sticky="ew")
             
             lbl = tk.Label(frame, text=text_label, bg="#f0f0f0", width=12, anchor="w", font=("Arial", 9))
             lbl.pack(side="left")
             
-            cb = ttk.Combobox(frame, textvariable=self.map_vars[key], state="readonly", width=15)
+            cb = ttk.Combobox(frame, textvariable=self.map_vars[key], state="readonly", width=16)
             cb.pack(side="left", padx=5)
+            cb.bind("<<ComboboxSelected>>", lambda e: self.update_preview())
             self.comboboxes[key] = cb
             
             col_idx += 1
@@ -97,15 +121,19 @@ class PresenterApp:
                 col_idx = 0
                 row_idx += 1
 
-        # --- SECCIÓN: Orden de Visualización ---
-        self.order_frame = tk.LabelFrame(main_frame, text="Orden de Visualización en Diapositiva", bg="#f0f0f0", font=("Arial", 10, "bold"), padx=10, pady=10)
-        self.order_frame.pack(fill="x", pady=(0, 10))
+        # --- SECCIÓN 3: Orden de Visualización y Vista Previa ---
+        middle_frame = tk.Frame(scrollable_frame, bg="#f0f0f0")
+        middle_frame.pack(fill="x", pady=(0, 10))
+
+        # Izquierda: Orden de campos
+        self.order_frame = tk.LabelFrame(middle_frame, text="Orden de Visualización", bg="#f0f0f0", font=("Arial", 10, "bold"), padx=10, pady=10)
+        self.order_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
 
         list_container = tk.Frame(self.order_frame, bg="#f0f0f0")
-        list_container.pack(fill="x")
+        list_container.pack(fill="both", expand=True)
 
-        self.order_listbox = tk.Listbox(list_container, height=8, font=("Arial", 10), selectmode=tk.SINGLE, activestyle="none")
-        self.order_listbox.pack(side="left", expand=True, fill="x", padx=(0, 10))
+        self.order_listbox = tk.Listbox(list_container, height=7, font=("Arial", 9), selectmode=tk.SINGLE, activestyle="none")
+        self.order_listbox.pack(side="left", expand=True, fill="both", padx=(0, 5))
 
         for visual_name in self.display_names.values():
             self.order_listbox.insert(tk.END, visual_name)
@@ -113,16 +141,29 @@ class PresenterApp:
         btn_container = tk.Frame(list_container, bg="#f0f0f0")
         btn_container.pack(side="right")
 
-        btn_up = tk.Button(btn_container, text="🔼 Subir", command=self.move_up, width=10, cursor="hand2")
-        btn_up.pack(pady=5)
-        btn_down = tk.Button(btn_container, text="🔽 Bajar", command=self.move_down, width=10, cursor="hand2")
-        btn_down.pack(pady=5)
+        btn_up = tk.Button(btn_container, text="🔼 Subir", command=self.move_up, width=8, cursor="hand2")
+        btn_up.pack(pady=3)
+        btn_down = tk.Button(btn_container, text="🔽 Bajar", command=self.move_down, width=8, cursor="hand2")
+        btn_down.pack(pady=3)
 
-        self.btn_generate = tk.Button(main_frame, text="GENERATE PRESENTATION", command=self.start_generation, bg="#007bff", fg="white", font=("Arial", 12, "bold"), padx=20, pady=10, cursor="hand2", relief="flat")
-        self.btn_generate.pack(pady=5)
-        self.progress_bar = ttk.Progressbar(main_frame, variable=self.progress_var, maximum=100)
+        # Derecha: Panel de Vista Previa (Live Preview)
+        preview_frame = tk.LabelFrame(middle_frame, text="👁️ Vista Previa en Tiempo Real", bg="#f0f0f0", font=("Arial", 10, "bold"), padx=10, pady=10)
+        preview_frame.pack(side="right", fill="both", expand=True, padx=(5, 0))
+
+        self.preview_canvas = tk.Canvas(preview_frame, width=320, height=210, bg="#ffffff", highlightthickness=1, highlightbackground="#bbb")
+        self.preview_canvas.pack(anchor="center")
+
+        btn_refresh = tk.Button(preview_frame, text="🔄 Actualizar Vista Previa", command=self.update_preview, font=("Arial", 8), cursor="hand2")
+        btn_refresh.pack(pady=(5, 0))
+
+        # --- Botón de Generar y Logs ---
+        self.btn_generate = tk.Button(scrollable_frame, text="🚀 GENERATE PRESENTATION", command=self.start_generation, bg="#007bff", fg="white", font=("Arial", 12, "bold"), padx=20, pady=10, cursor="hand2", relief="flat")
+        self.btn_generate.pack(fill="x", pady=5)
+        
+        self.progress_bar = ttk.Progressbar(scrollable_frame, variable=self.progress_var, maximum=100)
         self.progress_bar.pack(fill="x", pady=(0, 10))
-        self.log_area = scrolledtext.ScrolledText(main_frame, height=7, font=("Consolas", 9), state='disabled', bg="#fff", fg="#555")
+        
+        self.log_area = scrolledtext.ScrolledText(scrollable_frame, height=6, font=("Consolas", 9), state='disabled', bg="#fff", fg="#555")
         self.log_area.pack(fill="x")
 
     def move_up(self):
@@ -133,6 +174,7 @@ class PresenterApp:
                 self.order_listbox.delete(selected_idx)
                 self.order_listbox.insert(selected_idx - 1, text)
                 self.order_listbox.selection_set(selected_idx - 1)
+                self.update_preview()
         except IndexError:
             pass 
 
@@ -144,17 +186,18 @@ class PresenterApp:
                 self.order_listbox.delete(selected_idx)
                 self.order_listbox.insert(selected_idx + 1, text)
                 self.order_listbox.selection_set(selected_idx + 1)
+                self.update_preview()
         except IndexError:
             pass
 
     def create_file_row(self, parent, label_text, var, browse_func):
-        row = tk.Frame(parent, bg="#f0f0f0", pady=5)
+        row = tk.Frame(parent, bg="#f0f0f0", pady=3)
         row.pack(fill="x")
-        lbl = tk.Label(row, text=label_text, font=("Arial", 10), bg="#f0f0f0", width=15, anchor="w")
+        lbl = tk.Label(row, text=label_text, font=("Arial", 9), bg="#f0f0f0", width=22, anchor="w")
         lbl.pack(side="left")
-        ent = tk.Entry(row, textvariable=var, font=("Arial", 10))
+        ent = tk.Entry(row, textvariable=var, font=("Arial", 9))
         ent.pack(side="left", expand=True, fill="x", padx=5)
-        btn = tk.Button(row, text="Browse...", command=browse_func, font=("Arial", 9), cursor="hand2")
+        btn = tk.Button(row, text="Browse...", command=browse_func, font=("Arial", 8), cursor="hand2")
         btn.pack(side="right")
 
     def browse_excel(self):
@@ -166,6 +209,18 @@ class PresenterApp:
     def browse_output(self):
         path = filedialog.asksaveasfilename(defaultextension=".pptx", filetypes=[("PowerPoint files", "*.pptx")])
         if path: self.output_path.set(path)
+
+    def browse_template(self):
+        path = filedialog.askopenfilename(filetypes=[("PowerPoint files", "*.pptx")])
+        if path: 
+            self.template_path.set(path)
+            self.log(f"🎨 Plantilla seleccionada: {os.path.basename(path)}")
+
+    def browse_local_img_folder(self):
+        path = filedialog.askdirectory()
+        if path:
+            self.local_img_folder.set(path)
+            self.log(f"📁 Carpeta local de imágenes seleccionada: {path}")
         
     def load_excel_headers(self):
         try:
@@ -208,10 +263,71 @@ class PresenterApp:
             self.map_vars['gender'].set(guess(['genero', 'gender', 'sexo']))
             self.map_vars['silhouette'].set(guess(['silueta', 'silhouette', 'estilo', 'corte']))
             
-            self.log("✅ Encabezados cargados. Revisa la sección de Asignación de Columnas.")
+            self.log("✅ Encabezados cargados correctamente.")
+            self.update_preview()
 
         except Exception as e:
             self.log(f"❌ Error al cargar encabezados: {e}")
+
+    def update_preview(self):
+        """Renderiza una vista previa gráfica de la diapositiva en el Canvas."""
+        cv = self.preview_canvas
+        cv.delete("all")
+        
+        W, H = 320, 210
+        cv.create_rectangle(2, 2, W-2, H-2, fill="#ffffff", outline="#333333", width=1)
+        cv.create_line(W/2, 2, W/2, H-2, fill="#e0e0e0", dash=(3, 3))
+        cv.create_line(2, H/2, W-2, H/2, fill="#e0e0e0", dash=(3, 3))
+
+        # Muestras simuladas
+        sample_order = list(self.order_listbox.get(0, tk.END))
+        
+        # Cuadrante 1: Imagen Izquierda, Texto Derecha
+        cv.create_rectangle(10, 10, W/2 - 10, H/2 - 10, fill="#f8f9fa", outline="#007bff", width=1, dash=(2, 2))
+        cv.create_text(W/4, H/4, text="📷 Imagen P1", fill="#007bff", font=("Arial", 8, "bold"))
+        
+        # Texto P1
+        y_text = 12
+        for visual_name in sample_order[:5]:
+            key = self.display_to_key.get(visual_name, '')
+            val_col = self.map_vars.get(key, type('obj', (), {'get': lambda: ''})()).get()
+            if val_col == "--- Ninguno ---" or not val_col:
+                continue
+            
+            prefix = visual_name + ":"
+            txt = f"{prefix} Muestra"
+            if key == 'price': txt = "Precio: $1,299.00"
+            elif key == 'sku': txt = "SKU: 100266540"
+            elif key == 'name': txt = "NOMBRE EJEMPLO"
+            
+            color = "#000000" if key != 'price' else "#d9534f"
+            font_w = "bold" if key in ['name', 'price', 'sku'] else "normal"
+            cv.create_text(W/2 + 10, y_text, text=txt[:22], anchor="nw", fill=color, font=("Arial", 7, font_w))
+            y_text += 14
+            if y_text > H/2 - 15: break
+
+        # Cuadrante 2: Texto Izquierda, Imagen Derecha
+        y_text2 = H/2 + 12
+        for visual_name in sample_order[:5]:
+            key = self.display_to_key.get(visual_name, '')
+            val_col = self.map_vars.get(key, type('obj', (), {'get': lambda: ''})()).get()
+            if val_col == "--- Ninguno ---" or not val_col:
+                continue
+            
+            prefix = visual_name + ":"
+            txt = f"{prefix} Muestra"
+            if key == 'price': txt = "Precio: $1,499.00"
+            elif key == 'sku': txt = "SKU: 100272105"
+            elif key == 'name': txt = "NOMBRE EJEMPLO 2"
+            
+            color = "#000000" if key != 'price' else "#d9534f"
+            font_w = "bold" if key in ['name', 'price', 'sku'] else "normal"
+            cv.create_text(10, y_text2, text=txt[:22], anchor="nw", fill=color, font=("Arial", 7, font_w))
+            y_text2 += 14
+            if y_text2 > H - 15: break
+
+        cv.create_rectangle(W/2 + 10, H/2 + 10, W - 10, H - 10, fill="#f8f9fa", outline="#28a745", width=1, dash=(2, 2))
+        cv.create_text(3*W/4, 3*H/4, text="📷 Imagen P2", fill="#28a745", font=("Arial", 8, "bold"))
 
     def log(self, message):
         self.log_area.configure(state='normal')
@@ -222,7 +338,7 @@ class PresenterApp:
 
     def start_generation(self):
         if not self.excel_path.get() or not self.output_path.get():
-            messagebox.showerror("Error", "Please select at least the Excel file and the output location.")
+            messagebox.showerror("Error", "Por favor selecciona al menos el archivo Excel y la ubicación de salida.")
             return
         
         if not self.map_vars['sku'].get() or self.map_vars['sku'].get() == "--- Ninguno ---":
@@ -286,9 +402,43 @@ class PresenterApp:
             self.log(f"⚠️ Error extrayendo imágenes embebidas: {e}")
         return embedded_images
 
+    def resolve_product_image_bytes(self, product, embedded_map, row_idx):
+        """Búsqueda multifuente de imágenes: 1) Embebida en Excel, 2) Carpeta Local, 3) CDN S3."""
+        # 1. Embebida en Excel
+        for diff in [0, -1, 1]:
+            for (r, c), data in embedded_map.items():
+                if (r + 1) == (row_idx + diff):
+                    return data, "Embebida en Excel"
+
+        sku = product['sku']
+        extensions = ['jpg', 'png', 'jpeg', 'webp', 'JPG', 'PNG', 'JPEG', 'WEBP']
+
+        # 2. Carpeta local de imágenes
+        local_dir = self.local_img_folder.get()
+        if local_dir and os.path.isdir(local_dir):
+            for ext in extensions:
+                local_file = os.path.join(local_dir, f"{sku}.{ext}")
+                if os.path.isfile(local_file):
+                    try:
+                        with open(local_file, 'rb') as f:
+                            return f.read(), f"Carpeta Local ({ext})"
+                    except Exception:
+                        pass
+
+        # 3. Servidor CDN S3 (Probando múltiples extensiones)
+        for ext in ['jpg', 'png', 'jpeg', 'webp']:
+            url = f"https://s3.amazonaws.com/cdn.grabasaweb.mx/Imagenes/Imagenes_Preventa/{sku}.{ext}"
+            try:
+                resp = requests.get(url, timeout=4)
+                if resp.status_code == 200 and len(resp.content) > 100:
+                    return resp.content, f"CDN S3 ({ext})"
+            except Exception:
+                pass
+
+        return None, "No encontrada"
+
     def build_dynamic_data(self, product):
         """Construye los datos estructurados para texto con formato enriquecido."""
-        # Ahora devuelve una lista de tuplas: (Prefijo, Valor, Es_Espaciador)
         lines_data = []
         
         for visual_name in self.current_order:
@@ -321,7 +471,7 @@ class PresenterApp:
 
     def generate_logic(self):
         try:
-            self.log("🚀 Starting generation...")
+            self.log("🚀 Iniciando generación de presentación...")
             embedded_map = self.extract_embedded_images(self.excel_path.get())
             
             wb = openpyxl.load_workbook(self.excel_path.get(), data_only=True)
@@ -335,10 +485,16 @@ class PresenterApp:
                 else:
                     m_indices[key] = None
 
-            prs = Presentation()
-            prs.slide_width, prs.slide_height = Inches(10), Inches(7.5)
+            # --- MEJORA 1: Cargar plantilla PPTX si está seleccionada ---
+            template_file = self.template_path.get()
+            if template_file and os.path.isfile(template_file):
+                self.log(f"🎨 Cargando plantilla personalizada: {os.path.basename(template_file)}")
+                prs = Presentation(template_file)
+            else:
+                prs = Presentation()
+                prs.slide_width, prs.slide_height = Inches(10), Inches(7.5)
+
             products = []
-            
             for row_idx, row in enumerate(sheet.iter_rows(min_row=self.header_row_idx + 1, values_only=True), start=self.header_row_idx + 1):
                 sku_idx = m_indices['sku']
                 sku_val = row[sku_idx] if sku_idx is not None and sku_idx < len(row) else None
@@ -347,18 +503,6 @@ class PresenterApp:
                 clean_sku = str(sku_val).strip()
                 if clean_sku.endswith('.0'):
                     clean_sku = clean_sku[:-2]
-                
-                img_bytes = None
-                # Check exact row match first, then adjacent rows (tolerance for anchor offsets)
-                for diff in [0, -1, 1]:
-                    for (r, c), data in embedded_map.items():
-                        if (r + 1) == (row_idx + diff):
-                            img_bytes = data
-                            break
-                    if img_bytes:
-                        break
-                
-                final_url = f"https://s3.amazonaws.com/cdn.grabasaweb.mx/Imagenes/Imagenes_Preventa/{clean_sku}.jpg"
                 
                 def get_val(key):
                     idx = m_indices[key]
@@ -378,108 +522,76 @@ class PresenterApp:
                     'temp': get_val('temp'), 
                     'gender': get_val('gender'),
                     'silhouette': get_val('silhouette'),
-                    'url': final_url,
-                    'embedded_img': img_bytes
+                    'row_idx': row_idx
                 })
+
+            self.log(f"📦 Total de productos encontrados en Excel: {len(products)}")
             
             total_slides = (len(products) + 1) // 2
+            layout_idx = 6 if len(prs.slide_layouts) > 6 else 0
+
             for i in range(0, len(products), 2):
                 progress = ((i / 2) / total_slides) * 100
                 self.progress_var.set(progress)
-                self.log(f"Slide {i//2 + 1}/{total_slides}...")
-                slide = prs.slides.add_slide(prs.slide_layouts[6])
+                self.log(f"Generando Diapositiva {i//2 + 1}/{total_slides}...")
                 
+                slide = prs.slides.add_slide(prs.slide_layouts[layout_idx])
                 sw, sh = prs.slide_width, prs.slide_height
                 qw, qh = sw / 2, sh / 2
                 pad = Inches(0.4)
 
                 # --- PRODUCTO 1 ---
                 p1 = products[i]
-                if p1['embedded_img']:
-                    try:
-                        with Image.open(BytesIO(p1['embedded_img'])) as img:
-                            img_w, img_h = img.size
-                            aspect = img_w / img_h
-                            img_pad = Inches(0.3)
-                            max_w = qw - 2*img_pad
-                            max_h = qh - 2*img_pad
-                            if aspect > (max_w / max_h):
-                                final_w = max_w; final_h = max_w / aspect
-                            else:
-                                final_h = max_h; final_w = max_h * aspect
-                            off_x = 0 + (qw - final_w) / 2
-                            off_y = 0 + (qh - final_h) / 2
-                            slide.shapes.add_picture(BytesIO(p1['embedded_img']), off_x, off_y, final_w, final_h)
-                    except Exception as e:
-                        self.log(f"⚠️ Error procesando imagen embebida p1: {e}")
-                        if p1['url']: self.add_image_to_quadrant(slide, p1['url'], 0, 0, qw, qh)
-                elif p1['url']:
-                    self.add_image_to_quadrant(slide, p1['url'], 0, 0, qw, qh)
+                img_bytes_1, src_name1 = self.resolve_product_image_bytes(p1, embedded_map, p1['row_idx'])
+                if img_bytes_1:
+                    self.add_image_bytes_to_quadrant(slide, img_bytes_1, 0, 0, qw, qh)
+                else:
+                    self.log(f"⚠️ Sin imagen para SKU {p1['sku']}")
                 
-                # Se construye la data y se envía a la función constructora
                 p1_data = self.build_dynamic_data(p1)
                 self.create_box(slide, qw + pad, pad, qw - 2*pad, qh - 2*pad, p1_data, 15)
 
                 # --- PRODUCTO 2 ---
                 if i + 1 < len(products):
                     p2 = products[i+1]
-                    
                     p2_data = self.build_dynamic_data(p2)
                     self.create_box(slide, pad, qh + pad, qw - 2*pad, qh - 2*pad, p2_data, 15)
                     
-                    if p2['embedded_img']:
-                        try:
-                            with Image.open(BytesIO(p2['embedded_img'])) as img:
-                                img_w, img_h = img.size
-                                aspect = img_w / img_h
-                                img_pad = Inches(0.3)
-                                max_w = qw - 2*img_pad
-                                max_h = qh - 2*img_pad
-                                if aspect > (max_w / max_h):
-                                    final_w = max_w; final_h = max_w / aspect
-                                else:
-                                    final_h = max_h; final_w = max_h * aspect
-                                off_x = qw + (qw - final_w) / 2
-                                off_y = qh + (qh - final_h) / 2
-                                slide.shapes.add_picture(BytesIO(p2['embedded_img']), off_x, off_y, final_w, final_h)
-                        except Exception as e:
-                            self.log(f"⚠️ Error procesando imagen embebida p2: {e}")
-                            if p2['url']: self.add_image_to_quadrant(slide, p2['url'], qw, qh, qw, qh)
-                    elif p2['url']:
-                        self.add_image_to_quadrant(slide, p2['url'], qw, qh, qw, qh)
+                    img_bytes_2, src_name2 = self.resolve_product_image_bytes(p2, embedded_map, p2['row_idx'])
+                    if img_bytes_2:
+                        self.add_image_bytes_to_quadrant(slide, img_bytes_2, qw, qh, qw, qh)
+                    else:
+                        self.log(f"⚠️ Sin imagen para SKU {p2['sku']}")
 
             self.progress_var.set(100)
             prs.save(self.output_path.get())
-            self.log("\n✅ SUCCESS! File saved.")
-            messagebox.showinfo("Finished", "Presentation generated successfully!")
+            self.log("\n✅ ¡ÉXITO! Presentación generada y guardada correctamente.")
+            messagebox.showinfo("Finalizado", "¡Presentación generada con éxito!")
         except Exception as e:
             self.log(f"❌ ERROR: {str(e)}")
-            messagebox.showerror("Error", f"An unexpected error occurred: {e}")
+            messagebox.showerror("Error", f"Ocurrió un error inesperado: {e}")
         finally:
-            self.btn_generate.config(state='normal', text="GENERATE PRESENTATION")
+            self.btn_generate.config(state='normal', text="🚀 GENERATE PRESENTATION")
 
-    def add_image_to_quadrant(self, slide, url, left, top, width, height):
+    def add_image_bytes_to_quadrant(self, slide, img_bytes, left, top, width, height):
         try:
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                with Image.open(BytesIO(resp.content)) as img:
-                    img_w, img_h = img.size
-                    aspect = img_w / img_h
-                    img_pad = Inches(0.3)
-                    max_w = width - 2*img_pad
-                    max_h = height - 2*img_pad
-                    if aspect > (max_w / max_h):
-                        final_w = max_w; final_h = max_w / aspect
-                    else:
-                        final_h = max_h; final_w = max_h * aspect
-                    off_x = left + (width - final_w) / 2
-                    off_y = top + (height - final_h) / 2
-                    slide.shapes.add_picture(BytesIO(resp.content), off_x, off_y, final_w, final_h)
+            with Image.open(BytesIO(img_bytes)) as img:
+                img_w, img_h = img.size
+                aspect = img_w / img_h
+                img_pad = Inches(0.3)
+                max_w = width - 2*img_pad
+                max_h = height - 2*img_pad
+                if aspect > (max_w / max_h):
+                    final_w = max_w; final_h = max_w / aspect
+                else:
+                    final_h = max_h; final_w = max_h * aspect
+                off_x = left + (width - final_w) / 2
+                off_y = top + (height - final_h) / 2
+                slide.shapes.add_picture(BytesIO(img_bytes), off_x, off_y, final_w, final_h)
         except Exception as e:
-            self.log(f"⚠️ Image error ({url}): {e}")
+            self.log(f"⚠️ Error al insertar imagen en diapositiva: {e}")
 
     def create_box(self, slide, left, top, width, height, lines_data, font_size=15):
-        """Método actualizado para escribir texto párrafo por párrafo y aplicar formatos individuales."""
         txBox = slide.shapes.add_textbox(left, top, width, height)
         tf = txBox.text_frame
         tf.word_wrap = True
@@ -497,7 +609,7 @@ class PresenterApp:
             if is_spacer:
                 run = p.add_run()
                 run.text = " "
-                run.font.size = Pt(font_size * 0.8) # Espacio intermedio
+                run.font.size = Pt(font_size * 0.8)
                 continue
 
             # Prefijo en Negrita
@@ -513,7 +625,6 @@ class PresenterApp:
             run_val.font.name = 'Arial'
             run_val.font.color.rgb = RGBColor(0, 0, 0)
 
-            # Configuración para que el precio se vea más grande y completamente en negrita
             if "Precio" in prefix:
                 run_val.font.bold = True
                 run_prefix.font.size = Pt(font_size + 4)
