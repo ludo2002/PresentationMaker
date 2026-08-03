@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext, ttk
+from tkinter import filedialog, messagebox, scrolledtext, ttk, simpledialog
 import openpyxl
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -19,8 +19,8 @@ import threading
 class PresenterApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("CatalogMaster v3.1 🚀 - Menú de Plantillas & Divisor de Productos")
-        self.root.geometry("760x960") 
+        self.root.title("CatalogMaster v3.2 🚀 - Campos Personalizados & Plantillas")
+        self.root.geometry("780x980") 
         self.root.configure(bg="#f0f0f0")
         
         self.excel_path = tk.StringVar()
@@ -65,6 +65,9 @@ class PresenterApp:
             'price': 'Precio'
         }
         self.display_to_key = {v: k for k, v in self.display_names.items()}
+        self.custom_keys = set()
+        self.custom_field_counter = 0
+        self.comboboxes = {}
         self.current_order = []
         
         self.setup_ui()
@@ -86,9 +89,9 @@ class PresenterApp:
         main_canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        header = tk.Label(scrollable_frame, text="CatalogMaster v3.1", font=("Arial", 20, "bold"), bg="#f0f0f0", fg="#333")
+        header = tk.Label(scrollable_frame, text="CatalogMaster v3.2", font=("Arial", 20, "bold"), bg="#f0f0f0", fg="#333")
         header.pack(pady=(0, 2))
-        sub_header = tk.Label(scrollable_frame, text="Selección Fácil de Plantillas • Divisor Claro entre Productos • Vista Previa Interactiva", font=("Arial", 9, "italic"), bg="#f0f0f0", fg="#555")
+        sub_header = tk.Label(scrollable_frame, text="Campos Dinámicos Personalizados • Plantillas • Divisor Claro entre Productos", font=("Arial", 9, "italic"), bg="#f0f0f0", fg="#555")
         sub_header.pack(pady=(0, 10))
         
         # --- SECCIÓN 1: Selección de Plantilla y Rutas ---
@@ -113,37 +116,21 @@ class PresenterApp:
         # --- SECCIÓN 2: Mapeo de Columnas ---
         self.mapping_frame = tk.LabelFrame(scrollable_frame, text="Asignación de Columnas de Excel", bg="#f0f0f0", font=("Arial", 10, "bold"), padx=10, pady=10)
         self.mapping_frame.pack(fill="x", pady=(0, 10))
+
+        # Barra superior con botón de agregar campo personalizado
+        top_map_bar = tk.Frame(self.mapping_frame, bg="#f0f0f0")
+        top_map_bar.pack(fill="x", pady=(0, 5))
         
-        labels = {
-            'sku': 'SKU / Modelo:',
-            'name': 'Nombre:',
-            'color': 'Color:',
-            'price': 'Precio:',
-            'sizes': 'Tallas:',
-            'temp': 'Temporada:',
-            'gender': 'Género:',
-            'silhouette': 'Silueta:'
-        }
+        btn_add_field = tk.Button(top_map_bar, text="➕ Agregar Campo Personalizado", command=self.add_custom_field_dialog, bg="#28a745", fg="white", font=("Arial", 9, "bold"), relief="flat", cursor="hand2", padx=8, pady=2)
+        btn_add_field.pack(side="right")
         
-        row_idx = 0
-        col_idx = 0
-        self.comboboxes = {}
-        for key, text_label in labels.items():
-            frame = tk.Frame(self.mapping_frame, bg="#f0f0f0")
-            frame.grid(row=row_idx, column=col_idx, padx=5, pady=4, sticky="ew")
-            
-            lbl = tk.Label(frame, text=text_label, bg="#f0f0f0", width=12, anchor="w", font=("Arial", 9))
-            lbl.pack(side="left")
-            
-            cb = ttk.Combobox(frame, textvariable=self.map_vars[key], state="readonly", width=16)
-            cb.pack(side="left", padx=5)
-            cb.bind("<<ComboboxSelected>>", lambda e: self.update_preview())
-            self.comboboxes[key] = cb
-            
-            col_idx += 1
-            if col_idx > 1:
-                col_idx = 0
-                row_idx += 1
+        lbl_map_hint = tk.Label(top_map_bar, text="Selecciona la columna de Excel para cada campo:", font=("Arial", 9, "italic"), bg="#f0f0f0", fg="#666")
+        lbl_map_hint.pack(side="left")
+
+        self.fields_grid_frame = tk.Frame(self.mapping_frame, bg="#f0f0f0")
+        self.fields_grid_frame.pack(fill="x")
+
+        self.render_mapping_fields()
 
         # --- SECCIÓN 3: Orden de Visualización y Vista Previa ---
         middle_frame = tk.Frame(scrollable_frame, bg="#f0f0f0")
@@ -156,7 +143,7 @@ class PresenterApp:
         list_container = tk.Frame(self.order_frame, bg="#f0f0f0")
         list_container.pack(fill="both", expand=True)
 
-        self.order_listbox = tk.Listbox(list_container, height=7, font=("Arial", 9), selectmode=tk.SINGLE, activestyle="none")
+        self.order_listbox = tk.Listbox(list_container, height=8, font=("Arial", 9), selectmode=tk.SINGLE, activestyle="none")
         self.order_listbox.pack(side="left", expand=True, fill="both", padx=(0, 5))
 
         for visual_name in self.display_names.values():
@@ -189,6 +176,98 @@ class PresenterApp:
         
         self.log_area = scrolledtext.ScrolledText(scrollable_frame, height=6, font=("Consolas", 9), state='disabled', bg="#fff", fg="#555")
         self.log_area.pack(fill="x")
+
+    def render_mapping_fields(self):
+        """Redibuja dinámicamente el grid de asignación de columnas (incluyendo campos personalizados)."""
+        for child in self.fields_grid_frame.winfo_children():
+            child.destroy()
+            
+        self.comboboxes.clear()
+        opciones_desplegable = ["--- Ninguno ---"] + self.excel_headers if self.excel_headers else ["--- Ninguno ---"]
+
+        row_idx = 0
+        col_idx = 0
+
+        for key, var in self.map_vars.items():
+            visual_name = self.display_names.get(key, key)
+            is_custom = key in self.custom_keys
+
+            frame = tk.Frame(self.fields_grid_frame, bg="#f0f0f0")
+            frame.grid(row=row_idx, column=col_idx, padx=4, pady=3, sticky="ew")
+
+            label_text = f"✨ {visual_name}:" if is_custom else f"{visual_name}:"
+            lbl = tk.Label(frame, text=label_text, bg="#f0f0f0", width=14, anchor="w", font=("Arial", 9, "bold" if is_custom else "normal"))
+            lbl.pack(side="left")
+
+            cb = ttk.Combobox(frame, textvariable=var, state="readonly", width=15, values=opciones_desplegable)
+            cb.pack(side="left", padx=2)
+            cb.bind("<<ComboboxSelected>>", lambda e: self.update_preview())
+            self.comboboxes[key] = cb
+
+            if is_custom:
+                btn_del = tk.Button(frame, text="❌", command=lambda k=key: self.remove_custom_field(k), bg="#dc3545", fg="white", font=("Arial", 7, "bold"), width=2, relief="flat", cursor="hand2")
+                btn_del.pack(side="left", padx=2)
+
+            col_idx += 1
+            if col_idx > 1:
+                col_idx = 0
+                row_idx += 1
+
+    def add_custom_field_dialog(self):
+        field_name = simpledialog.askstring("Nuevo Campo Personalizado", "Ingresa el nombre del nuevo campo (ej. Marca, Categoría, Descuento):", parent=self.root)
+        if field_name and field_name.strip():
+            self.add_custom_field(field_name.strip())
+
+    def add_custom_field(self, name):
+        name_clean = name.strip()
+        if name_clean in self.display_to_key:
+            messagebox.showwarning("Campo Existente", f"El campo '{name_clean}' ya existe.")
+            return
+
+        self.custom_field_counter += 1
+        key = f"custom_{self.custom_field_counter}"
+        self.custom_keys.add(key)
+
+        self.map_vars[key] = tk.StringVar()
+        self.display_names[key] = name_clean
+        self.display_to_key[name_clean] = key
+
+        self.render_mapping_fields()
+
+        # Agregar a la lista de ordenamiento
+        self.order_listbox.insert(tk.END, name_clean)
+
+        # Autoadivinar coincidencia si hay encabezados de Excel cargados
+        if self.excel_headers:
+            for col_name in self.excel_headers:
+                if col_name and name_clean.lower() in col_name.lower():
+                    self.map_vars[key].set(col_name)
+                    break
+            else:
+                self.map_vars[key].set("--- Ninguno ---")
+
+        self.log(f"➕ Campo personalizado agregado: '{name_clean}'")
+        self.update_preview()
+
+    def remove_custom_field(self, key):
+        display_name = self.display_names.get(key)
+        if not display_name:
+            return
+
+        if messagebox.askyesno("Eliminar Campo", f"¿Deseas eliminar el campo personalizado '{display_name}'?"):
+            del self.map_vars[key]
+            del self.display_names[key]
+            del self.display_to_key[display_name]
+            self.custom_keys.remove(key)
+
+            items = self.order_listbox.get(0, tk.END)
+            if display_name in items:
+                idx = items.index(display_name)
+                self.order_listbox.delete(idx)
+
+            self.render_mapping_fields()
+            self.log(f"🗑️ Campo personalizado eliminado: '{display_name}'")
+            self.update_preview()
 
     def on_template_selected(self, event=None):
         selected = self.template_select_var.get()
@@ -282,10 +361,7 @@ class PresenterApp:
                 self.log("⚠️ No se encontraron encabezados claros. Revisa tu Excel.")
                 return
 
-            opciones_desplegable = ["--- Ninguno ---"] + self.excel_headers
-
-            for key, cb in self.comboboxes.items():
-                cb['values'] = opciones_desplegable
+            self.render_mapping_fields()
             
             def guess(keywords):
                 for col_name in self.excel_headers:
@@ -302,6 +378,10 @@ class PresenterApp:
             self.map_vars['gender'].set(guess(['genero', 'gender', 'sexo']))
             self.map_vars['silhouette'].set(guess(['silueta', 'silhouette', 'estilo', 'corte']))
             
+            for key in self.custom_keys:
+                display_name = self.display_names.get(key, '')
+                self.map_vars[key].set(guess([display_name.lower()]))
+
             self.log("✅ Encabezados cargados correctamente.")
             self.update_preview()
 
@@ -366,7 +446,7 @@ class PresenterApp:
         cv.create_text((img_x1 + W/2 - 10)/2, (20 + H/2 - 10)/2, text="📷 Producto 1", fill=divider_color, font=("Arial", 7, "bold"))
 
         y_text = 20
-        for visual_name in sample_order[:4]:
+        for visual_name in sample_order[:5]:
             key = self.display_to_key.get(visual_name, '')
             val_col = self.map_vars.get(key, type('obj', (), {'get': lambda: ''})()).get()
             if val_col == "--- Ninguno ---" or not val_col:
@@ -380,12 +460,12 @@ class PresenterApp:
             
             color = text_main if key != 'price' else text_accent
             font_w = "bold" if key in ['name', 'price', 'sku'] else "normal"
-            cv.create_text(W/2 + 10, y_text, text=txt[:22], anchor="nw", fill=color, font=("Arial", 7, font_w))
-            y_text += 13
+            cv.create_text(W/2 + 10, y_text, text=txt[:24], anchor="nw", fill=color, font=("Arial", 7, font_w))
+            y_text += 12
 
         # --- PRODUCTO 2 (Abajo) ---
         y_text2 = H/2 + 15
-        for visual_name in sample_order[:4]:
+        for visual_name in sample_order[:5]:
             key = self.display_to_key.get(visual_name, '')
             val_col = self.map_vars.get(key, type('obj', (), {'get': lambda: ''})()).get()
             if val_col == "--- Ninguno ---" or not val_col:
@@ -399,8 +479,8 @@ class PresenterApp:
             
             color = text_main if key != 'price' else text_accent
             font_w = "bold" if key in ['name', 'price', 'sku'] else "normal"
-            cv.create_text(img_x1, y_text2, text=txt[:22], anchor="nw", fill=color, font=("Arial", 7, font_w))
-            y_text2 += 13
+            cv.create_text(img_x1, y_text2, text=txt[:24], anchor="nw", fill=color, font=("Arial", 7, font_w))
+            y_text2 += 12
 
         cv.create_rectangle(W/2 + 10, H/2 + 15, W - 15, H - 15, fill=card_bg, outline=divider_color, width=1, dash=(2, 2))
         cv.create_text((W/2 + 10 + W - 15)/2, (H/2 + 15 + H - 15)/2, text="📷 Producto 2", fill=divider_color, font=("Arial", 7, "bold"))
@@ -514,7 +594,9 @@ class PresenterApp:
         lines_data = []
         
         for visual_name in self.current_order:
-            key = self.display_to_key[visual_name] 
+            key = self.display_to_key.get(visual_name)
+            if not key:
+                continue
             val = product.get(key)
             
             if not val or (val == "N/A" and key == 'sku'):
@@ -536,7 +618,7 @@ class PresenterApp:
                     'gender': 'Genero:',
                     'silhouette': 'Silueta:'
                 }
-                prefix = label_prefixes.get(key, visual_name + ":")
+                prefix = label_prefixes.get(key, f"{visual_name}:")
                 lines_data.append((prefix, f" {val}", False))
                 
         return lines_data
@@ -565,7 +647,6 @@ class PresenterApp:
                 prs = Presentation(template_file)
                 if len(prs.slides) > 0:
                     has_template_slide = True
-                    # Snapshot únicamente los elementos de fondo originales de la plantilla
                     for shape in prs.slides[0].shapes:
                         template_bg_elements.append(copy.deepcopy(shape.element))
             else:
@@ -582,8 +663,8 @@ class PresenterApp:
                 if clean_sku.endswith('.0'):
                     clean_sku = clean_sku[:-2]
                 
-                def get_val(key):
-                    idx = m_indices[key]
+                def get_val(k):
+                    idx = m_indices[k]
                     if idx is not None:
                         if idx < len(row) and row[idx] is not None:
                             return str(row[idx]).strip()
@@ -591,17 +672,15 @@ class PresenterApp:
                             return "N/A"
                     return ""
 
-                products.append({
-                    'sku': clean_sku, 
-                    'name': get_val('name'), 
-                    'color': get_val('color'), 
-                    'price': get_val('price'), 
-                    'sizes': get_val('sizes'), 
-                    'temp': get_val('temp'), 
-                    'gender': get_val('gender'),
-                    'silhouette': get_val('silhouette'),
+                prod_dict = {
+                    'sku': clean_sku,
                     'row_idx': row_idx
-                })
+                }
+                for k in self.map_vars.keys():
+                    if k != 'sku':
+                        prod_dict[k] = get_val(k)
+
+                products.append(prod_dict)
 
             self.log(f"📦 Total de productos encontrados en Excel: {len(products)}")
             
@@ -610,17 +689,17 @@ class PresenterApp:
 
             # Determinar color y grosor de línea divisoria según plantilla
             tpl_name = self.template_select_var.get()
-            div_color = RGBColor(230, 230, 230) # Gris claro apenas visible para plantilla predeterminada
-            line_thickness = Inches(0.01) # 1pt ultra delgado
+            div_color = RGBColor(230, 230, 230)
+            line_thickness = Inches(0.01)
             
             if "Dark Mode" in tpl_name:
-                div_color = RGBColor(255, 215, 0) # Gold
+                div_color = RGBColor(255, 215, 0)
                 line_thickness = Inches(0.03)
             elif "Urban Red" in tpl_name:
-                div_color = RGBColor(255, 69, 0) # Red-Orange
+                div_color = RGBColor(255, 69, 0)
                 line_thickness = Inches(0.03)
             elif "Corporativa" in tpl_name:
-                div_color = RGBColor(0, 122, 255) # Blue
+                div_color = RGBColor(0, 122, 255)
                 line_thickness = Inches(0.03)
 
             for i in range(0, len(products), 2):
@@ -688,7 +767,6 @@ class PresenterApp:
             with Image.open(BytesIO(img_bytes)) as img:
                 img_w, img_h = img.size
                 aspect = img_w / img_h
-                # Margen reducido (0.1") para maximizar el tamaño de la imagen dentro de la plantilla
                 img_pad = Inches(0.1)
                 max_w = width - 2*img_pad
                 max_h = height - 2*img_pad
