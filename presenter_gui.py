@@ -24,6 +24,7 @@ class PresenterApp:
         self.root.configure(bg="#f0f0f0")
         
         self.excel_path = tk.StringVar()
+        self.sheet_var = tk.StringVar()
         self.output_path = tk.StringVar()
         self.template_path = tk.StringVar()
         self.template_select_var = tk.StringVar(value="🎨 Predeterminada (Lienzo Blanco)")
@@ -110,6 +111,14 @@ class PresenterApp:
         self.cb_template.bind("<<ComboboxSelected>>", self.on_template_selected)
 
         self.create_file_row(files_frame, "Excel File (.xlsx):", self.excel_path, self.browse_excel)
+
+        sheet_row = tk.Frame(files_frame, bg="#f0f0f0", pady=3)
+        sheet_row.pack(fill="x")
+        tk.Label(sheet_row, text="Hoja del Excel:", font=("Arial", 9, "bold"), bg="#f0f0f0", width=22, anchor="w", fg="#007bff").pack(side="left")
+        self.cb_sheet = ttk.Combobox(sheet_row, textvariable=self.sheet_var, values=[], state="disabled", font=("Arial", 9))
+        self.cb_sheet.pack(side="left", expand=True, fill="x", padx=5)
+        self.cb_sheet.bind("<<ComboboxSelected>>", self.on_sheet_selected)
+
         self.create_file_row(files_frame, "Save As (.pptx):", self.output_path, self.browse_output)
         self.create_file_row(files_frame, "Carpeta Imágenes (Opcional):", self.local_img_folder, self.browse_local_img_folder)
 
@@ -318,8 +327,14 @@ class PresenterApp:
 
     def browse_excel(self):
         path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
-        if path: 
+        if path:
             self.excel_path.set(path)
+            self.sheet_var.set("")
+            self.load_excel_headers()
+
+    def on_sheet_selected(self, event=None):
+        if self.excel_path.get() and self.sheet_var.get():
+            self.log(f"📄 Hoja seleccionada: {self.sheet_var.get()}")
             self.load_excel_headers()
 
     def browse_output(self):
@@ -340,11 +355,29 @@ class PresenterApp:
             self.local_img_folder.set(path)
             self.log(f"📁 Carpeta local de imágenes seleccionada: {path}")
         
+    @staticmethod
+    def select_worksheet(workbook, sheet_name=None):
+        """Devuelve la hoja solicitada o la hoja activa si no se indicó una."""
+        if sheet_name:
+            if sheet_name not in workbook.sheetnames:
+                raise ValueError(f"La hoja '{sheet_name}' no existe en el archivo Excel.")
+            return workbook[sheet_name]
+        return workbook.active
+
     def load_excel_headers(self):
         try:
             self.log("Cargando encabezados del Excel...")
             wb = openpyxl.load_workbook(self.excel_path.get(), data_only=True, read_only=True)
-            sheet = wb.active
+            sheet_names = wb.sheetnames
+            self.cb_sheet.configure(values=sheet_names, state="readonly")
+            selected_name = self.sheet_var.get()
+            if selected_name not in sheet_names:
+                active_sheet = wb.active
+                if active_sheet is None:
+                    raise ValueError("El archivo Excel no contiene una hoja activa.")
+                selected_name = active_sheet.title
+                self.sheet_var.set(selected_name)
+            sheet = self.select_worksheet(wb, selected_name)
             
             self.excel_headers = []
             self.header_row_idx = 1
@@ -382,7 +415,7 @@ class PresenterApp:
                 display_name = self.display_names.get(key, '')
                 self.map_vars[key].set(guess([display_name.lower()]))
 
-            self.log("✅ Encabezados cargados correctamente.")
+            self.log(f"✅ Encabezados cargados de la hoja '{selected_name}'.")
             self.update_preview()
 
         except Exception as e:
@@ -507,11 +540,47 @@ class PresenterApp:
         self.btn_generate.config(state='disabled', text="Processing...")
         threading.Thread(target=self.generate_logic, daemon=True).start()
 
-    def extract_embedded_images(self, excel_path):
+    def extract_embedded_images(self, excel_path, sheet_name=None):
         embedded_images = {}
         try:
+            self.image_links = {}
             with zipfile.ZipFile(excel_path, 'r') as z:
-                drawing_files = [f for f in z.namelist() if f.startswith('xl/drawings/drawing') and f.endswith('.xml')]
+                # Follow workbook -> active sheet -> drawing relationships. Sheet
+                # numbers are not guaranteed to match their position in the file.
+                main_ns = {'m': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+                rel_attr = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}'
+                pkg_ns = {'p': 'http://schemas.openxmlformats.org/package/2006/relationships'}
+
+                def relations(part):
+                    path = posixpath.join(posixpath.dirname(part), '_rels', posixpath.basename(part) + '.rels')
+                    if path not in z.namelist():
+                        return {}
+                    return {r.get('Id'): (r.get('Target'), r.get('TargetMode', 'Internal'))
+                            for r in ET.fromstring(z.read(path)).findall('p:Relationship', pkg_ns)}
+
+                def resolve(part, target):
+                    return target.lstrip('/') if target.startswith('/') else posixpath.normpath(posixpath.join(posixpath.dirname(part), target))
+
+                workbook = ET.fromstring(z.read('xl/workbook.xml'))
+                view = workbook.find('m:bookViews/m:workbookView', main_ns)
+                active_index = int(view.get('activeTab', '0')) if view is not None else 0
+                sheets = workbook.findall('m:sheets/m:sheet', main_ns)
+                selected_sheet = None
+                if sheet_name:
+                    selected_sheet = next((item for item in sheets if item.get('name') == sheet_name), None)
+                    if selected_sheet is None:
+                        raise ValueError(f"La hoja '{sheet_name}' no existe en el archivo Excel.")
+                else:
+                    selected_sheet = sheets[active_index]
+                sheet_rid = selected_sheet.get(rel_attr + 'id')
+                sheet_part = resolve('xl/workbook.xml', relations('xl/workbook.xml')[sheet_rid][0])
+                sheet = ET.fromstring(z.read(sheet_part))
+                sheet_rels = relations(sheet_part)
+                drawing_files = []
+                for drawing in sheet.findall('m:drawing', main_ns):
+                    rid = drawing.get(rel_attr + 'id')
+                    if rid in sheet_rels:
+                        drawing_files.append(resolve(sheet_part, sheet_rels[rid][0]))
                 for drawing_file in drawing_files:
                     xml_content = z.read(drawing_file)
                     root = ET.fromstring(xml_content)
@@ -542,53 +611,83 @@ class PresenterApp:
                             if pic is not None:
                                 blip = pic.find('.//a:blip', ns)
                                 if blip is not None:
-                                    rid = None
-                                    for attr_k, attr_v in blip.attrib.items():
-                                        if attr_k.endswith('embed') or attr_k.endswith('id') or attr_k.endswith('link'):
-                                            rid = attr_v
-                                            break
+                                    rid = blip.get(rel_attr + 'embed')
                                     if rid and rid in rels_map:
                                         target, mode = rels_map[rid]
                                         if mode == 'Internal':
-                                            full_path = posixpath.normpath(posixpath.join(posixpath.dirname(drawing_file), target))
+                                            full_path = resolve(drawing_file, target)
                                             if full_path in z.namelist():
                                                 embedded_images[(row, col)] = z.read(full_path)
+                                    links = []
+                                    click = pic.find('.//a:hlinkClick', ns)
+                                    for link_id in (click.get(rel_attr + 'id') if click is not None else None,
+                                                    blip.get(rel_attr + 'link')):
+                                        if link_id in rels_map:
+                                            target, mode = rels_map[link_id]
+                                            if mode == 'External' and target.startswith(('https://', 'http://')) and target not in links:
+                                                links.append(target)
+                                    if links:
+                                        self.image_links[(row, col)] = links
             self.log(f"🖼️ Se extrajeron {len(embedded_images)} imágenes embebidas del archivo Excel.")
         except Exception as e:
             self.log(f"⚠️ Error extrayendo imágenes embebidas: {e}")
         return embedded_images
 
     def resolve_product_image_bytes(self, product, embedded_map, row_idx):
-        """Búsqueda multifuente de imágenes: 1) Embebida en Excel, 2) Carpeta Local, 3) CDN S3."""
-        for diff in [0, -1, 1]:
-            for (r, c), data in embedded_map.items():
-                if (r + 1) == (row_idx + diff):
-                    return data, "Embebida en Excel"
+        """Elige la imagen válida con más píxeles entre Excel, carpeta y CDN."""
+        candidates = []
+
+        def consider(data, source):
+            try:
+                with Image.open(BytesIO(data)) as image:
+                    width, height = image.size
+                    image.verify()
+                if width > 0 and height > 0:
+                    candidates.append((width * height, data, source, width, height))
+            except Exception:
+                pass
+
+        # Los índices de dibujo son base cero; nunca usar la fila de otro producto.
+        for (row, _col), data in embedded_map.items():
+            if row + 1 == row_idx:
+                consider(data, "Embebida en Excel")
 
         sku = product['sku']
-        extensions = ['jpg', 'png', 'jpeg', 'webp', 'JPG', 'PNG', 'JPEG', 'WEBP']
-
+        extensions = ['jpg', 'png', 'jpeg', 'webp']
         local_dir = self.local_img_folder.get()
         if local_dir and os.path.isdir(local_dir):
-            for ext in extensions:
+            for ext in extensions + [ext.upper() for ext in extensions]:
                 local_file = os.path.join(local_dir, f"{sku}.{ext}")
                 if os.path.isfile(local_file):
                     try:
                         with open(local_file, 'rb') as f:
-                            return f.read(), f"Carpeta Local ({ext})"
-                    except Exception:
+                            consider(f.read(), f"Carpeta Local ({ext})")
+                    except OSError:
                         pass
 
-        for ext in ['jpg', 'png', 'jpeg', 'webp']:
-            url = f"https://s3.amazonaws.com/cdn.grabasaweb.mx/Imagenes/Imagenes_Preventa/{sku}.{ext}"
+        urls = []
+        for (row, _col), links in getattr(self, 'image_links', {}).items():
+            if row + 1 == row_idx:
+                urls.extend((url, "Enlace de Excel") for url in links)
+        urls.extend((f"https://s3.amazonaws.com/cdn.grabasaweb.mx/Imagenes/Imagenes_Preventa/{sku}.{ext}",
+                     f"CDN S3 ({ext})") for ext in extensions)
+        visited = set()
+        for url, source in urls:
+            if url in visited:
+                continue
+            visited.add(url)
             try:
                 resp = requests.get(url, timeout=4)
-                if resp.status_code == 200 and len(resp.content) > 100:
-                    return resp.content, f"CDN S3 ({ext})"
-            except Exception:
+                if resp.status_code == 200:
+                    consider(resp.content, source)
+            except requests.RequestException:
                 pass
 
-        return None, "No encontrada"
+        if not candidates:
+            return None, "No encontrada"
+        _, data, source, width, height = max(candidates, key=lambda candidate: candidate[0])
+        self.log(f"🖼️ {sku}: {source}, {width} × {height} píxeles")
+        return data, source
 
     def build_dynamic_data(self, product):
         lines_data = []
@@ -626,10 +725,12 @@ class PresenterApp:
     def generate_logic(self):
         try:
             self.log("🚀 Iniciando generación de presentación...")
-            embedded_map = self.extract_embedded_images(self.excel_path.get())
+            selected_sheet_name = self.sheet_var.get()
+            self.log(f"📄 Procesando hoja: {selected_sheet_name}")
+            embedded_map = self.extract_embedded_images(self.excel_path.get(), sheet_name=selected_sheet_name)
             
             wb = openpyxl.load_workbook(self.excel_path.get(), data_only=True)
-            sheet = wb.active
+            sheet = self.select_worksheet(wb, selected_sheet_name)
             
             m_indices = {}
             for key, var in self.map_vars.items():
@@ -682,7 +783,8 @@ class PresenterApp:
 
                 products.append(prod_dict)
 
-            self.log(f"📦 Total de productos encontrados en Excel: {len(products)}")
+            wb.close()
+            self.log(f"📦 Total de productos encontrados en la hoja '{selected_sheet_name}': {len(products)}")
             
             total_slides = (len(products) + 1) // 2
             layout_idx = 6 if len(prs.slide_layouts) > 6 else 0
@@ -766,6 +868,10 @@ class PresenterApp:
         try:
             with Image.open(BytesIO(img_bytes)) as img:
                 img_w, img_h = img.size
+                if img.format == 'WEBP':
+                    converted = BytesIO()
+                    img.save(converted, format='PNG')
+                    img_bytes = converted.getvalue()
                 aspect = img_w / img_h
                 img_pad = Inches(0.1)
                 max_w = width - 2*img_pad
